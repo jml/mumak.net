@@ -13,6 +13,10 @@ body {
     background: white;
 }
 
+h1 {
+    border-bottom: thin black solid;
+}
+
 
 .blog-title {
     color: white;
@@ -21,6 +25,12 @@ body {
 .blog-title a {
     text-decoration:none;
     color: white;
+}
+
+.blog-title img {
+    border: none;
+    margin: -10;
+    float: right;
 }
 
 p {
