@@ -1,0 +1,166 @@
+<html>
+
+<p>
+  Twisted's unit testing framework Trial is quite strict on tests that don't
+  clean up after themselves. In particular, any test that doesn't properly
+  close all of its connections is fails with ugly errors.
+</p>
+
+<p>
+  If you are already glazing over with apathy towards unit tests, unglaze now.
+  Disconnecting is a little more involved than you might expect, and there's
+  every chance you aren't doing it correctly.
+</p>
+
+<p>
+  Thanks to <a href="http://moshez.livejournal.com">moshez</a> and teratorn
+  for reviewing this document.  Any errors are still my fault.
+</p>
+
+<h2>How to Disconnect in Twisted, Really</h2>
+
+<p>
+  You are writing a test for some network code. You have already written many
+unit tests for the protocol and the protocol factories, and you assume that
+the lower level socket calls all work. You have deep confidence in your code,
+but you need more.
+</p>
+
+<p>You yearn to write an end-to-end test. To set up the server, have it
+<em>really</em> listen, have the client <em>really</em> connect. You want data to zoom
+back and forth over the wire like luxury sportscars on the Autobahn.</p>
+
+<p>Fine.</p>
+
+<p>You start with a server and a client.</p>
+
+<p>You want the client to connect to the server. You want things to happen. When
+things have happened, you want to assert stuff.</p>
+
+<p>After the assertions, you want to disconnect the client and you want the
+server to go away.</p>
+
+<p>Good.</p>
+
+<p>I'm not going to help you set things up, I'm not going to help you make things
+happen. I <em>am</em> going to help you make all your connections just go away.</p>
+
+<p>Let me lay down the law:
+<ol>
+ <li>The server must stop listening.
+ <li>The client connection must disconnect.
+ <li>The server connection must disconnect.
+</ol>
+</p>
+
+<p>
+You have to make each of these things happen. That's easy. Here's the tricky
+part: <b>you have to <i>wait</i> for each of these things to happen.</b></p>
+
+To make the server stop listening:
+<pre>
+    port = reactor.listenTCP(portNumber, factory)
+    ...
+    port.stopListening()
+</pre>
+
+You can effect the last two with one stroke, using either of the following
+commands:
+<pre>
+    protocol.transport.loseConnection()
+</pre>
+
+<p>OR</p>
+
+<pre>
+    connector = reactor.connectTCP(host, port, factory)
+    ...
+    connector.disconnect()
+</pre>
+
+<p>Now, just running these commands is <em>not</em> enough. Twisted is asynchronous:
+you have to wait for it to call you.</p>
+
+<p>The way to wait for something in a Trial test is to return a <code>Deferred</code> from
+the test method.</p>
+
+<p><code>stopListening</code> is easy. It returns a <code>Deferred</code> if it is going to take a
+while. The others are harder. There is only one way to know when the connection
+has truly been lost: override <code>connectionLost</code> on a <code>Protocol</code> instance. Pass
+a <code>Deferred</code> to your <code>Protocol</code> and have <code>connectionLost</code> call <code>callback</code> on
+that <code>Deferred</code>. You will need to do this for <em>both</em> the client <em>and</em> the
+server protocols. Once you have your three <code>Deferred</code>s, return them in a
+<code>DeferredList</code>.</p>
+
+<p>Simple.</p>
+
+<p>
+  <b>UPDATE: </b><a href="http://jcalderone.livejournal.com">exarkun</a> tells
+  me that there are two ways to know when the connection has truly been lost
+  on the client side. ClientFactory.clientConnectionLost is the other one.</p>
+
+<h3>Summary</h3>
+
+<p><b>In order to clean up a test that connects a client to a server, you need to
+wait on three <code>Deferred</code>s: one for the listening port, one for the server
+protocol and one for the client protocol.</b></p>
+
+<p>Below is an example demonstrating how to disconnect. As you can see, it is
+quite verbose. Trial does not provide any shortcuts, even though it should.</p>
+
+<pre>
+from twisted.internet import defer, protocol
+from twisted.trial import unittest
+
+class ServerProtocol(protocol.Protocol):
+    def connectionLost(self, *a):
+        self.factory.onConnectionLost.callback(self)
+
+class ClientProtocol(protocol.Protocol):
+    def connectionMade(self):
+        self.factory.onConnectionMade.callback(self)
+
+    def connectionLost(self, *a):
+        self.factory.onConnectionLost.callback(self)
+
+
+class TestDisconnect(unittest.TestCase):
+    def setUp(self):
+        self.serverDisconnected = defer.Deferred()
+        self.serverPort = self._listenServer(self.serverDisconnected)
+        connected = defer.Deferred()
+        self.clientDisconnected = defer.Deferred()
+        self.clientConnection = self._connectClient(connected,
+                                                    self.clientDisconnected)
+        return connected
+
+    def _listenServer(self, d):
+        from twisted.internet import reactor
+        f = protocol.Factory()
+        f.onConnectionLost = d
+        f.protocol = ServerProtocol
+        return reactor.listenTCP(0, f)
+
+    def _connectClient(self, d1, d2):
+        from twisted.internet import reactor
+        factory = protocol.ClientFactory()
+        factory.protocol = ClientProtocol
+        factory.onConnectionMade = d1
+        factory.onConnectionLost = d2
+        return reactor.connectTCP('localhost',
+                                  self.serverPort.getHost().port,
+                                  factory)
+
+    def tearDown(self):
+        d = defer.maybeDeferred(self.serverPort.stopListening)
+        self.clientConnection.disconnect()
+        return defer.gatherResults([d,
+                                    self.clientDisconnected,
+                                    self.serverDisconnected])
+
+    def test_disconnect(self):
+        pass
+
+</pre>
+
+</html>
