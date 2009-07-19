@@ -1,0 +1,226 @@
+= unittest: it ain't broke, let's fix it =
+
+== ABSTRACT ==
+
+unittest first appeared in Python 2.1 as a port from the popular JUnit testing
+framework. Python has changed a lot since then, and the Python community has
+learned much about testing and what it means to write Pythonic code.
+
+Should we write a new testing framework, a purely Pythonic one free of any Java
+(or Smalltalk) heritage? The authors humbly suggest "no": unittest is very
+powerful and extensible, it's just not quite extensible enough.
+
+We present some stories of how unittest has been used by major projects, how it
+has been abused (often by us) and the consequences of that abuse. We look at
+how these disasters could have been avoided.
+
+
+== TALK ==
+
+I'm actually a little relucant to give this talk. I'm reluctant for two
+reasons. First, I was originally going to co-present this talk with my
+colleague and friend Robert Collins. However, Robert wasn't able to make it
+here, so I'm going it alone.
+
+The other reason is that I've never seen unit-testing talked about without
+there being an argument. And because I'm here, speaking to you, it's highly
+likely that in any argument I shall find myself rather embarrassingly wrong.
+
+I do want to have time for questions and discussion, since to me that's the
+most interesting part. So what I'd like to do is briefly explain the structure
+of unittest, show how to extend it, talk about its good points and its bad
+points, and then open up for discussion.
+
+This whole talk rests on one big idea: that the unittest module in the
+standard library is actually pretty good.
+
+
+=== unittest: what is it ===
+
+unittest is a module to help you write unit tests. That much is obvious.
+
+But for the moment, I want you to think of that as an incidental detail. It's
+not actually about helping you write unit tests. It's really an API for
+manipulating and running tests.
+
+Actually, if you forgive me for saying so, it's not even that. It's for running
+arbitrary user code that has a narrow, predefined set of results.
+
+Because it's for running arbitrary user code that has a narrow, predefined
+range of results, unittest has two core classes. One that represents an
+arbitrary chunk of runnable user code that can have results, and another
+object that collects those results.
+
+The first class is called TestCase, and the second class is called
+TestResult.
+
+None of the other classes matter. TestRunner is a bad idea and TestSuite is
+simply a neat way of grouping TestCases. TestLoader is interesting, but I'm
+ignoring it to keep this talk short.
+
+In the sense that we're talking about it, TestCase has a fairly narrow
+interface. It has:
+  * countTestCases() :: Integer
+  * shortDescription() :: String
+  * id() :: String
+  * run(TestResult)
+  * debug(TestResult)
+
+None of the other methods -- assertEqual, setUp etc -- matter. These methods
+are the public interface of a TestCase object.
+
+The TestResult object has a broader interface:
+  * startTest(TestCase)
+  * stopTest(TestCase)
+  * wasSuccessful() :: Bool
+  * addError(TestCase, Exception)
+  * addFailure(TestCase, Exception)
+  * addSuccess(TestCase)
+  * stopTests()
+
+Well, that's what it was circa Python 2.3. Since then, the interface has been
+made even broader, mostly in a good way, by adding startTestRun, stopTestRun,
+and more types of results.
+
+The way it works is that you take an object that provides the TestCase
+interface, and an object that provides the TestResult interface, and you call
+run on the test case, passing it the test result object. Various addFoo()
+methods on the result object are called from the run() method.
+
+==== How not to extend unittest ====
+
+The best way to make this structure clearer is to look at ways to extend
+unittest. The best way to do that is by example.
+
+I'm going to pick on a particular problem -- sharing expensive resources
+between tests -- and look at a couple of flawed attempts at a solution.
+
+===== setUpClass / tearDownClass =====
+
+This first approach is one taken by the Twisted unit testing framework Trial.
+It's my mistake, and I've lived to regret it thoroughly.
+
+Here's how it worked.
+
+The base Twisted TestCase define methods setUpClass and tearDownClass. Those
+methods would set attributes on a single test object that was re-used for
+every test method on that class.
+
+This meant that the test loader had to know about the setUpClass and
+tearDownClass methods, so that it wouldn't screw up the ordering of the test
+run by interleaving tests from one class with tests from another.
+
+But even worse -- sharing the test object between actual tests! It violates
+test isolation on principle, which leads to tests that accidentally depend on
+ordering, which is so terrible I'm surprised the UN didn't intervene.
+
+
+===== zope.testing layers =====
+
+Zope tries to solve a similar problem in its testing framework using something
+that it calls "layers".
+
+A test that needs to use, say, the database defines a magical attribute
+'layer' setting it to *the* layer that a test runs in. The zope.testing loader
+finds this attribute and uses it to construct the test appropriately. It also
+uses a special TestResult object to store state about which layer a test is
+running in.
+
+This means that simply constructing a test that uses layers and then calling
+run() will not work. It breaks the contract that unittest provides, since you
+need to have the correct test suite and the correct test layer.
+
+There are many other problems with layers, I shan't bore you with them now.
+
+
+==== How to extend unittest ====
+
+===== testresources =====
+
+testresources, available on Launchpad, solves the problem in a nice way.
+
+
+
+
+
+
+
+== Bad Points ==
+
+countTestCases is a bad idea. It assumes that you know the number of tests
+that you are going to run in advance of the run.
+
+shortDescription is a bad idea. There should be one and only way to get a way
+of describing a test. That the default runners use shortDescription and that
+shortDescription defaults to a docstring compounds this. You generally want to
+find the code of a failing test, not read a description of what it does.
+
+
+
+
+
+What are the worst things that can happen with unit testing? Having no tests
+at all is pretty bad. Tests that take hours or even days to run -- that's also
+bad; it slows down the pace of development...
+
+
+== THEMES ==
+
+ * unittest is often misunderstood
+ 
+ * Tear apart the terrible ideas that have been implemented:
+   * Trial -- setUpClass, tearDownClass
+   * Zope layers
+   * Module level set up and teardown
+
+
+ * Is the model right?
+   * We think yes.
+   * Law of software development, model matches API
+
+ * Describe the model (incl the bugs)
+ * Directions: things that should be done to unittest to make it better
+ * The way to write extensions: principles, point to more.
+
+ * Bugs in unittest
+   * countTestCases assumes you know the answer now.
+   * needs all test cases to be loaded first.
+   * doesn't delete test cases once they are done.
+   * multiple ways of identifying a test (one way to do it)
+   * no way to reconstruct a test given its id
+   * too hard to customize manner of calling setUp, test_foo & tearDown
+     e.g. Trial deferred
+     Have to duplicate code.
+   * FunctionTestCase should be beautiful
+   * Not calling tearDown if setUp fails
+   * Doesn't support __iter__
+ * Subclassing TestCase for testing infrastructure
+
+ * Three parts
+   * Get clear on unittest for noobs
+   * section for advanced
+   * Questions
+
+ * Good things
+   * addCleanup
+   * subunit
+   * testresources
+
+ * Distinguish between dodgy use of unittest and dodgy use that unittest
+   enforces / encourages.
+
+ * Current model is that you have a class hierarchy -- each test method calls
+   those. Discovery finds those, instantiates those, back to base model.
+   This drives things to the root of the hierarchy.
+
+   
+
+== STORIES ==
+
+How unittest has been used and abused by major projects.
+
+
+
+
+We want you to understand how unittest can be fixed and extended so that you
+will help us all by fixing and extending this.
